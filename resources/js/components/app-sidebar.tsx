@@ -4,7 +4,8 @@ import {
     BookPlus,
     ClipboardList,
     LayoutGrid,
-    LibraryBig,
+    FileText,
+    ChartNoAxesColumnIncreasing,
     UsersRound,
 } from 'lucide-react';
 import AppLogo from '@/components/app-logo';
@@ -28,14 +29,19 @@ const mainNavItems: NavItem[] = [
         icon: LayoutGrid,
     },
     {
-        title: 'Courses',
+        title: 'Explore courses',
         href: '/courses',
         icon: BookOpen,
     },
     {
-        title: 'Modules',
-        href: '/modules',
-        icon: LibraryBig,
+        title: 'My progress',
+        href: '/progress',
+        icon: ChartNoAxesColumnIncreasing,
+    },
+    {
+        title: 'Study materials',
+        href: '/my-materials',
+        icon: FileText,
     },
 ];
 
@@ -49,7 +55,11 @@ const adminNavItems: NavItem[] = [
 export function AppSidebar() {
     const { auth } = usePage().props;
     const isAdmin = auth.user?.role === 'admin';
-    const navItems = isAdmin ? adminNavItems : mainNavItems;
+    const navItems = isAdmin
+        ? adminNavItems
+        : auth.user
+          ? mainNavItems
+          : mainNavItems.slice(0, 2);
 
     return (
         <Sidebar collapsible="icon" variant="inset">

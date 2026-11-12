@@ -20,6 +20,20 @@ use Laravel\Fortify\TwoFactorAuthenticatable;
  * @property string $name
  * @property string $email
  * @property string $role
+ * @property bool $must_change_password
+ * @property string|null $student_no
+ * @property string|null $first_name
+ * @property string|null $middle_name
+ * @property string|null $last_name
+ * @property Carbon|null $date_enrolled
+ * @property string|null $status
+ * @property string|null $modality
+ * @property string|null $class_id
+ * @property string|null $subject
+ * @property string|null $section
+ * @property string|null $schedule
+ * @property string|null $o365_email
+ * @property string|null $display_name
  * @property Carbon|null $email_verified_at
  * @property string $password
  * @property string|null $two_factor_secret
@@ -80,9 +94,9 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
-            /* @chisel-2fa */
+            'must_change_password' => 'boolean',
+            'date_enrolled' => 'date',
             'two_factor_confirmed_at' => 'datetime',
-            /* @end-chisel-2fa */
         ];
     }
 }

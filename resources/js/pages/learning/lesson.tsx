@@ -8,8 +8,14 @@ import {
     LockKeyhole,
     Timer,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Lesson } from '@/types/lms';
+
+type TimerState = 'resume' | 'heartbeat' | 'pause';
+type TimerResponse = {
+    remaining_seconds: number;
+    completed: boolean;
+};
 
 type LessonDetail = Lesson & {
     content: string;
@@ -43,22 +49,152 @@ export default function LessonPage({
     const [remainingSeconds, setRemainingSeconds] = useState(
         lesson.remaining_seconds,
     );
-    const [afterComplete, setAfterComplete] = useState<'stay' | 'next'>('stay');
-    const [submitting, setSubmitting] = useState(false);
+    const [pageFocused, setPageFocused] = useState(false);
+    const [timerRunning, setTimerRunning] = useState(false);
     const [timerError, setTimerError] = useState<string | null>(null);
     const autoSubmitted = useRef(false);
+    const timerRequestQueue = useRef<Promise<void>>(Promise.resolve());
+    const timerActive = useRef(false);
     const paragraphs = lesson.content.split(/\n{2,}/).filter(Boolean);
     const completeHref = `/lessons/${lesson.id}/complete`;
     const canTrack = Boolean(auth.user) && course.can_participate;
 
+    const sendTimerState = useCallback(
+        (state: TimerState, keepalive = false): Promise<void> => {
+            const request = timerRequestQueue.current.then(async () => {
+                const csrfToken = document.querySelector<HTMLMetaElement>(
+                    'meta[name="csrf-token"]',
+                )?.content;
+                if (!csrfToken) {
+                    throw new Error(
+                        'The security token is missing. Refresh the page and try again.',
+                    );
+                }
+
+                const response = await fetch(`/lessons/${lesson.id}/timer`, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    keepalive,
+                    headers: {
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': csrfToken,
+                        'X-Requested-With': 'XMLHttpRequest',
+                    },
+                    body: JSON.stringify({ state }),
+                });
+                if (!response.ok) {
+                    throw new Error(
+                        'Could not save focused lesson time. Refresh the page and try again.',
+                    );
+                }
+
+                const result = (await response.json()) as TimerResponse;
+                setRemainingSeconds(result.remaining_seconds);
+                if (result.completed) setTimerRunning(false);
+            });
+            timerRequestQueue.current = request.catch(() => undefined);
+
+            return request;
+        },
+        [lesson.id],
+    );
+
     useEffect(() => {
-        if (
-            !canTrack ||
-            lesson.completed ||
-            remainingSeconds === null ||
-            remainingSeconds <= 0
-        )
+        const updateFocus = () => {
+            setPageFocused(
+                document.visibilityState === 'visible' && document.hasFocus(),
+            );
+        };
+        updateFocus();
+        window.addEventListener('focus', updateFocus);
+        window.addEventListener('blur', updateFocus);
+        document.addEventListener('visibilitychange', updateFocus);
+
+        return () => {
+            window.removeEventListener('focus', updateFocus);
+            window.removeEventListener('blur', updateFocus);
+            document.removeEventListener('visibilitychange', updateFocus);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!canTrack || lesson.completed) {
+            setTimerRunning(false);
+
             return;
+        }
+
+        if (!pageFocused) {
+            setTimerRunning(false);
+            if (timerActive.current) {
+                timerActive.current = false;
+                void sendTimerState('pause', true).catch((error: unknown) =>
+                    setTimerError(
+                        error instanceof Error
+                            ? error.message
+                            : 'Could not pause the lesson timer.',
+                    ),
+                );
+            }
+
+            return;
+        }
+
+        let disposed = false;
+        let heartbeat: number | undefined;
+        void sendTimerState('resume')
+            .then(() => {
+                if (disposed) {
+                    return sendTimerState('pause', true);
+                }
+                timerActive.current = true;
+                setTimerError(null);
+                setTimerRunning(true);
+                heartbeat = window.setInterval(() => {
+                    void sendTimerState('heartbeat')
+                        .then(() => {
+                            setTimerError(null);
+                            setTimerRunning(true);
+                        })
+                        .catch((error: unknown) => {
+                            setTimerRunning(false);
+                            setTimerError(
+                                error instanceof Error
+                                    ? error.message
+                                    : 'Could not save focused lesson time.',
+                            );
+                        });
+                }, 5000);
+            })
+            .catch((error: unknown) => {
+                setTimerRunning(false);
+                setTimerError(
+                    error instanceof Error
+                        ? error.message
+                        : 'Could not resume the lesson timer.',
+                );
+            });
+
+        return () => {
+            disposed = true;
+            if (heartbeat !== undefined) window.clearInterval(heartbeat);
+            setTimerRunning(false);
+            if (timerActive.current) {
+                timerActive.current = false;
+                void sendTimerState('pause', true).catch((error: unknown) =>
+                    setTimerError(
+                        error instanceof Error
+                            ? error.message
+                            : 'Could not pause the lesson timer.',
+                    ),
+                );
+            }
+        };
+    }, [canTrack, lesson.completed, pageFocused, sendTimerState]);
+
+    useEffect(() => {
+        if (!timerRunning) return;
 
         const timer = window.setInterval(() => {
             setRemainingSeconds((seconds) =>
@@ -67,22 +203,22 @@ export default function LessonPage({
         }, 1000);
 
         return () => window.clearInterval(timer);
-    }, [canTrack, lesson.completed, remainingSeconds]);
+    }, [timerRunning]);
 
     useEffect(() => {
         if (
             !canTrack ||
             lesson.completed ||
+            !timerRunning ||
             remainingSeconds !== 0 ||
             autoSubmitted.current
         )
             return;
 
         autoSubmitted.current = true;
-        setSubmitting(true);
         router.post(
             completeHref,
-            { continue: afterComplete === 'next' },
+            { continue: false },
             {
                 preserveScroll: true,
                 onError: (errors) => {
@@ -93,15 +229,14 @@ export default function LessonPage({
                     setRemainingSeconds(1);
                     autoSubmitted.current = false;
                 },
-                onFinish: () => setSubmitting(false),
             },
         );
     }, [
-        afterComplete,
         canTrack,
         completeHref,
         lesson.completed,
         remainingSeconds,
+        timerRunning,
     ]);
 
     const formattedTime =
@@ -178,7 +313,7 @@ export default function LessonPage({
                                                 {lesson.completed
                                                     ? 'Your progress has been saved.'
                                                     : canTrack
-                                                      ? 'Stay on this lesson for its full duration to complete it.'
+                                                      ? 'Your progress is saved automatically when the timer ends.'
                                                       : auth.user
                                                         ? 'This course is read-only. You can review lesson content.'
                                                         : 'Sign in to track lesson time and save your progress.'}
@@ -212,55 +347,6 @@ export default function LessonPage({
                                         {timerError}
                                     </p>
                                 )}
-                                {canTrack &&
-                                    !lesson.completed &&
-                                    nextLesson && (
-                                        <fieldset className="mt-4 rounded-xl border border-slate-200 px-4 py-3">
-                                            <legend className="px-1 text-xs font-semibold text-slate-600">
-                                                After the timer finishes
-                                            </legend>
-                                            <div className="flex flex-wrap gap-x-6 gap-y-2">
-                                                <label className="flex items-center gap-2 text-sm text-slate-600">
-                                                    <input
-                                                        type="radio"
-                                                        name="after-complete"
-                                                        value="stay"
-                                                        checked={
-                                                            afterComplete ===
-                                                            'stay'
-                                                        }
-                                                        onChange={() =>
-                                                            setAfterComplete(
-                                                                'stay',
-                                                            )
-                                                        }
-                                                        className="accent-emerald-800"
-                                                    />
-                                                    Stay on this lesson
-                                                </label>
-                                                <label className="flex items-center gap-2 text-sm text-slate-600">
-                                                    <input
-                                                        type="radio"
-                                                        name="after-complete"
-                                                        value="next"
-                                                        checked={
-                                                            afterComplete ===
-                                                            'next'
-                                                        }
-                                                        onChange={() =>
-                                                            setAfterComplete(
-                                                                'next',
-                                                            )
-                                                        }
-                                                        className="accent-emerald-800"
-                                                    />
-                                                    {submitting
-                                                        ? 'Saving…'
-                                                        : 'Continue to the next lesson'}
-                                                </label>
-                                            </div>
-                                        </fieldset>
-                                    )}
                                 <div className="mt-7 flex items-center justify-between gap-4">
                                     {previousLesson ? (
                                         <Link

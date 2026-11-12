@@ -70,6 +70,15 @@ export type CourseSection = {
     description: string | null;
     banner_url: string | null;
     lesson_count: number;
+    materials: CourseMaterial[];
+    documents: CourseDocument[];
+};
+
+export type CourseDocument = {
+    id: number;
+    title: string;
+    hidden_from_students: boolean;
+    show_url: string;
 };
 
 export type CourseMaterial = {
@@ -79,4 +88,9 @@ export type CourseMaterial = {
     size: number;
     is_video: boolean;
     download_url: string;
+    course_section_id: number | null;
+    course?: {
+        title: string;
+        slug: string;
+    };
 };

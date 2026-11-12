@@ -25,4 +25,20 @@ class CourseSection extends Model
     {
         return $this->hasMany(Lesson::class)->orderBy('sequence');
     }
+
+    /**
+     * @return HasMany<CourseMaterial, $this>
+     */
+    public function materials(): HasMany
+    {
+        return $this->hasMany(CourseMaterial::class);
+    }
+
+    /**
+     * @return HasMany<CourseDocument, $this>
+     */
+    public function documents(): HasMany
+    {
+        return $this->hasMany(CourseDocument::class);
+    }
 }

@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-#[Fillable(['course_id', 'uploaded_by', 'title', 'path', 'mime_type', 'size'])]
+#[Fillable(['course_id', 'course_section_id', 'uploaded_by', 'title', 'path', 'mime_type', 'size'])]
 class CourseMaterial extends Model
 {
     /**
@@ -15,6 +15,14 @@ class CourseMaterial extends Model
     public function course(): BelongsTo
     {
         return $this->belongsTo(Course::class);
+    }
+
+    /**
+     * @return BelongsTo<CourseSection, $this>
+     */
+    public function section(): BelongsTo
+    {
+        return $this->belongsTo(CourseSection::class, 'course_section_id');
     }
 
     /**

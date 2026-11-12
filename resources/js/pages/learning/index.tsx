@@ -1,16 +1,13 @@
-import { Head, Link, usePage } from '@inertiajs/react';
+import { Head, Link } from '@inertiajs/react';
 import {
-    ArrowRight,
     BookOpen,
-    Clock3,
-    Compass,
-    GraduationCap,
+    BookOpenCheck,
+    LayoutGrid,
+    List,
     Search,
-    Sparkles,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { CourseCard } from '@/components/learning/course-card';
-import { login } from '@/routes';
 import type { Course, LearningModule } from '@/types/lms';
 
 type Props = {
@@ -19,268 +16,257 @@ type Props = {
     auth: { user: { name: string } | null };
 };
 
-const colors: Record<string, { badge: string; number: string }> = {
-    blue: {
-        badge: 'bg-emerald-100 text-emerald-800',
-        number: 'text-emerald-800',
-    },
-    orange: {
-        badge: 'bg-emerald-100 text-emerald-800',
-        number: 'text-emerald-800',
-    },
-    green: {
-        badge: 'bg-emerald-100 text-emerald-700',
-        number: 'text-emerald-700',
-    },
-    indigo: {
-        badge: 'bg-emerald-100 text-emerald-800',
-        number: 'text-emerald-800',
-    },
-};
-
-export default function LearningHome({ modules, courses }: Props) {
-    const { auth } = usePage<Props>().props;
+export default function LearningHome({ modules, courses, auth }: Props) {
     const [search, setSearch] = useState('');
-    const featuredCourse =
-        courses.find((course) => course.progress > 0) ?? courses[0];
-    const completedLessons = courses.reduce(
-        (sum, course) => sum + course.completed_count,
-        0,
+    const [layout, setLayout] = useState<'list' | 'grid'>('list');
+    const query = search.trim().toLowerCase();
+    const filteredCourses = useMemo(
+        () =>
+            courses.filter((course) =>
+                `${course.title} ${course.summary} ${course.module?.title ?? ''} ${course.teacher ?? course.instructor}`
+                    .toLowerCase()
+                    .includes(query),
+            ),
+        [courses, query],
     );
-    const filteredCourses = useMemo(() => {
-        const query = search.trim().toLowerCase();
-        return query
-            ? courses.filter((course) =>
-                  `${course.title} ${course.summary} ${course.module?.title ?? ''}`
-                      .toLowerCase()
-                      .includes(query),
-              )
-            : courses;
-    }, [courses, search]);
+    const groups = [
+        ...modules
+            .map((module) => ({
+                key: module.slug,
+                title: module.title,
+                courses: filteredCourses.filter(
+                    (course) => course.module?.slug === module.slug,
+                ),
+            }))
+            .filter((group) => group.courses.length > 0),
+        {
+            key: 'other',
+            title: 'Other courses',
+            courses: filteredCourses.filter((course) => !course.module),
+        },
+    ].filter((group) => group.courses.length > 0);
+    const inProgress = courses.filter(
+        (course) => course.progress > 0 && course.progress < 100,
+    );
+    const completed = courses.filter(
+        (course) => course.progress === 100,
+    ).length;
+    const firstName = auth.user?.name.split(' ')[0];
 
     return (
         <>
-            <Head title="My learning" />
-            <div className="mx-auto max-w-[1440px] px-4 py-8 sm:px-7 lg:px-10">
-                <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
-                    <div>
-                        <p className="text-sm font-medium text-slate-500">
-                            {auth.user
-                                ? `Welcome back, ${auth.user.name.split(' ')[0]}`
-                                : 'A little time for yourself'}
-                        </p>
-                        <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-900">
-                            Keep your momentum.
-                        </h1>
-                        <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500">
-                            Small steps lead to big things. Pick up where you
-                            left off or find something new to learn.
-                        </p>
-                    </div>
-                    <div className="flex flex-wrap gap-3">
-                        {!auth.user && (
-                            <Link
-                                href={login()}
-                                className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#174b33] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#123c2b]"
-                            >
-                                Sign in
-                            </Link>
-                        )}
-                        <Link
-                            href="/courses"
-                            className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
-                        >
-                            <Compass className="size-4" />
-                            Explore courses
-                        </Link>
-                    </div>
-                </div>
+            <Head title="Courses" />
+            <div className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
+                <header className="mb-5">
+                    <p className="text-xs font-semibold tracking-wide text-emerald-800 uppercase">
+                        {firstName
+                            ? `Welcome back, ${firstName}`
+                            : 'University of the Visayas · Lifelong Learning'}
+                    </p>
+                    <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+                        Courses
+                    </h1>
+                </header>
 
-                <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#123c2b] via-[#165536] to-[#207448] px-6 py-7 text-white sm:px-9 sm:py-9">
-                    <div
-                        aria-hidden="true"
-                        className="absolute -top-32 -right-10 size-80 rounded-full border-[52px] border-white/[0.045]"
-                    />
-                    <div
-                        aria-hidden="true"
-                        className="absolute right-36 -bottom-36 size-72 rounded-full bg-emerald-300/[0.09]"
-                    />
-                    <div className="relative max-w-xl">
-                        <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-emerald-50">
-                            <Sparkles className="size-3.5" />
-                            Your learning space
-                        </div>
-                        <h2 className="mt-5 max-w-lg text-2xl leading-tight font-semibold tracking-tight sm:text-3xl">
-                            {featuredCourse
-                                ? completedLessons > 0
-                                    ? 'You’re doing great. Ready for the next lesson?'
-                                    : 'Make room for something new.'
-                                : 'There’s always something new to learn.'}
-                        </h2>
-                        <p className="mt-3 max-w-md text-sm leading-6 text-slate-300">
-                            {featuredCourse
-                                ? completedLessons > 0
-                                    ? `Continue ${featuredCourse.title} and keep building on what you know.`
-                                    : 'Start with one of our short, practical courses and learn at your own pace.'
-                                : 'Explore friendly, practical courses designed to help you build skills at your own pace.'}
-                        </p>
-                        {featuredCourse && (
-                            <Link
-                                href={`/courses/${featuredCourse.slug}`}
-                                className="mt-6 inline-flex h-10 items-center gap-2 rounded-xl bg-white px-4 text-sm font-semibold text-[#174b33] transition hover:bg-emerald-50"
+                <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_260px]">
+                    <section className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-4">
+                            <div
+                                role="group"
+                                aria-label="Course layout"
+                                className="flex rounded-md border border-slate-300 bg-white p-0.5"
                             >
-                                {featuredCourse.progress > 0
-                                    ? 'Continue learning'
-                                    : 'Find your first course'}
-                                <ArrowRight className="size-4" />
-                            </Link>
-                        )}
-                    </div>
-                    <div className="relative mt-7 flex max-w-lg gap-7 border-t border-white/15 pt-5 sm:gap-10">
-                        <div>
-                            <p className="text-xl font-semibold">
-                                {modules.length}
-                            </p>
-                            <p className="mt-1 text-xs text-slate-300">
-                                learning modules
-                            </p>
+                                <button
+                                    type="button"
+                                    aria-label="List view"
+                                    aria-pressed={layout === 'list'}
+                                    onClick={() => setLayout('list')}
+                                    className={`flex size-8 items-center justify-center rounded ${layout === 'list' ? 'bg-[#183a2a] text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                                >
+                                    <List className="size-4" />
+                                </button>
+                                <button
+                                    type="button"
+                                    aria-label="Grid view"
+                                    aria-pressed={layout === 'grid'}
+                                    onClick={() => setLayout('grid')}
+                                    className={`flex size-8 items-center justify-center rounded ${layout === 'grid' ? 'bg-[#183a2a] text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                                >
+                                    <LayoutGrid className="size-4" />
+                                </button>
+                            </div>
+                            <label className="flex h-10 min-w-52 flex-1 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-slate-500 sm:max-w-sm">
+                                <Search className="size-4 shrink-0" />
+                                <span className="sr-only">Search courses</span>
+                                <input
+                                    type="search"
+                                    value={search}
+                                    onChange={(event) =>
+                                        setSearch(event.target.value)
+                                    }
+                                    placeholder="Search your courses"
+                                    className="w-full border-0 bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-500 focus:ring-0"
+                                />
+                            </label>
+                            <span className="text-xs text-slate-600">
+                                {filteredCourses.length}{' '}
+                                {filteredCourses.length === 1
+                                    ? 'result'
+                                    : 'results'}
+                            </span>
                         </div>
-                        <div>
-                            <p className="text-xl font-semibold">
-                                {courses.length}
-                            </p>
-                            <p className="mt-1 text-xs text-slate-300">
-                                self-paced courses
-                            </p>
-                        </div>
-                        <div>
-                            <p className="text-xl font-semibold">
-                                {completedLessons}
-                            </p>
-                            <p className="mt-1 text-xs text-slate-300">
-                                lessons completed
-                            </p>
-                        </div>
-                    </div>
-                </section>
 
-                <section className="mt-10">
-                    <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
-                        <div>
-                            <p className="text-xs font-semibold tracking-[0.15em] text-emerald-800 uppercase">
-                                A path for every curiosity
-                            </p>
-                            <h2 className="mt-1.5 text-xl font-semibold tracking-tight text-slate-900">
-                                Explore learning modules
+                        {groups.length > 0 ? (
+                            groups.map((group) => (
+                                <section key={group.key} className="mt-4">
+                                    <h2 className="mb-2 text-sm font-semibold text-slate-800">
+                                        {group.title}
+                                    </h2>
+                                    <div
+                                        className={
+                                            layout === 'list'
+                                                ? 'space-y-3'
+                                                : 'grid gap-4 sm:grid-cols-2 2xl:grid-cols-3'
+                                        }
+                                    >
+                                        {group.courses.map((course) => (
+                                            <CourseCard
+                                                key={course.id}
+                                                course={course}
+                                                layout={layout}
+                                            />
+                                        ))}
+                                    </div>
+                                </section>
+                            ))
+                        ) : (
+                            <div className="mt-4 border border-dashed border-slate-300 bg-white p-10 text-center">
+                                <Search className="mx-auto size-7 text-slate-400" />
+                                <h2 className="mt-3 font-semibold text-slate-900">
+                                    No courses found
+                                </h2>
+                                <p className="mt-1 text-sm text-slate-500">
+                                    Try another search or explore the course
+                                    catalog.
+                                </p>
+                                <Link
+                                    href="/courses"
+                                    className="mt-4 inline-flex text-sm font-semibold text-emerald-800 hover:text-emerald-950"
+                                >
+                                    Browse all courses
+                                </Link>
+                            </div>
+                        )}
+                    </section>
+
+                    <aside className="space-y-4">
+                        <section className="border border-slate-200 bg-white">
+                            <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+                                {auth.user
+                                    ? 'Learning overview'
+                                    : 'Get started'}
                             </h2>
-                        </div>
-                        <Link
-                            href="/modules"
-                            className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-800 hover:text-emerald-900"
-                        >
-                            All modules <ArrowRight className="size-4" />
-                        </Link>
-                    </div>
-                    {modules.length > 0 ? (
-                        <div className="grid gap-3 md:grid-cols-3">
-                            {modules.map((module, index) => {
-                                const color =
-                                    colors[module.color] ?? colors.indigo;
-                                return (
+                            {auth.user ? (
+                                <div className="space-y-4 p-4">
+                                    <OverviewRow
+                                        icon={BookOpen}
+                                        label="Course library"
+                                        value={courses.length}
+                                    />
+                                    <OverviewRow
+                                        icon={BookOpenCheck}
+                                        label="In progress"
+                                        value={inProgress.length}
+                                    />
+                                    <OverviewRow
+                                        icon={BookOpenCheck}
+                                        label="Completed"
+                                        value={completed}
+                                    />
+                                    <Link
+                                        href="/progress"
+                                        className="block border-t border-slate-100 pt-3 text-sm font-medium text-emerald-800 hover:text-emerald-950"
+                                    >
+                                        View my progress
+                                    </Link>
+                                </div>
+                            ) : (
+                                <div className="p-4">
+                                    <p className="text-sm leading-6 text-slate-600">
+                                        Sign in to open your courses and save
+                                        learning progress.
+                                    </p>
+                                    <Link
+                                        href="/login"
+                                        className="mt-3 inline-flex h-9 items-center rounded-md bg-[#183a2a] px-3 text-sm font-semibold text-white hover:bg-[#102b20]"
+                                    >
+                                        Sign in
+                                    </Link>
+                                </div>
+                            )}
+                        </section>
+
+                        <section className="border border-slate-200 bg-white">
+                            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                                <h2 className="text-sm font-semibold text-slate-900">
+                                    Learning modules
+                                </h2>
+                                <Link
+                                    href="/modules"
+                                    className="text-xs font-medium text-emerald-800 hover:text-emerald-950"
+                                >
+                                    All
+                                </Link>
+                            </div>
+                            <div className="divide-y divide-slate-100">
+                                {modules.map((module) => (
                                     <Link
                                         key={module.id}
                                         href={`/modules/${module.slug}`}
-                                        className="group rounded-2xl border border-slate-200/80 bg-white p-5 transition hover:border-slate-300 hover:shadow-md hover:shadow-slate-200/50"
+                                        className="block px-4 py-3 text-sm text-slate-700 transition hover:bg-emerald-50 hover:text-emerald-900"
                                     >
-                                        <div className="flex items-center justify-between">
-                                            <span
-                                                className={`flex size-10 items-center justify-center rounded-xl text-sm font-semibold ${color.badge}`}
-                                            >
-                                                0{index + 1}
-                                            </span>
-                                            <ArrowRight className="size-4 text-slate-300 transition group-hover:translate-x-1 group-hover:text-emerald-800" />
-                                        </div>
-                                        <h3 className="mt-5 font-semibold text-slate-900 group-hover:text-emerald-800">
+                                        <span className="block font-medium">
                                             {module.title}
-                                        </h3>
-                                        <p className="mt-1.5 min-h-10 text-sm leading-5 text-slate-500">
-                                            {module.description}
-                                        </p>
-                                        <div className="mt-4 flex items-center gap-4 border-t border-slate-100 pt-3 text-xs text-slate-500">
-                                            <span className="flex items-center gap-1.5">
-                                                <BookOpen
-                                                    className={`size-3.5 ${color.number}`}
-                                                />
-                                                {module.course_count} courses
-                                            </span>
-                                            <span className="flex items-center gap-1.5">
-                                                <Clock3 className="size-3.5" />
-                                                {module.lesson_count} lessons
-                                            </span>
-                                        </div>
+                                        </span>
+                                        <span className="mt-1 block text-xs text-slate-500">
+                                            {module.course_count} courses
+                                        </span>
                                     </Link>
-                                );
-                            })}
-                        </div>
-                    ) : (
-                        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
-                            <GraduationCap className="mx-auto size-8 text-slate-400" />
-                            <h3 className="mt-3 font-semibold text-slate-900">
-                                Your learning library is getting ready
-                            </h3>
-                            <p className="mt-1 text-sm text-slate-500">
-                                Check back soon for new learning modules and
-                                courses.
-                            </p>
-                        </div>
-                    )}
-                </section>
-
-                <section className="mt-10 pb-8">
-                    <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
-                        <div>
-                            <p className="text-xs font-semibold tracking-[0.15em] text-emerald-800 uppercase">
-                                Learn something useful
-                            </p>
-                            <h2 className="mt-1.5 text-xl font-semibold tracking-tight text-slate-900">
-                                {search
-                                    ? 'Course results'
-                                    : 'Courses picked for you'}
-                            </h2>
-                        </div>
-                        <label className="flex h-10 w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-slate-400 shadow-sm sm:w-64">
-                            <Search className="size-4 shrink-0" />
-                            <input
-                                type="search"
-                                value={search}
-                                onChange={(event) =>
-                                    setSearch(event.target.value)
-                                }
-                                placeholder="Search courses"
-                                className="w-full border-0 bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:ring-0"
-                            />
-                        </label>
-                    </div>
-                    {filteredCourses.length > 0 ? (
-                        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                            {filteredCourses.map((course) => (
-                                <CourseCard key={course.id} course={course} />
-                            ))}
-                        </div>
-                    ) : (
-                        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
-                            <Search className="mx-auto size-7 text-slate-400" />
-                            <h3 className="mt-3 font-semibold text-slate-900">
-                                No courses found
-                            </h3>
-                            <p className="mt-1 text-sm text-slate-500">
-                                Try another search to find what you’re looking
-                                for.
-                            </p>
-                        </div>
-                    )}
-                </section>
+                                ))}
+                                {!modules.length && (
+                                    <p className="px-4 py-3 text-sm text-slate-500">
+                                        Modules will appear here.
+                                    </p>
+                                )}
+                            </div>
+                        </section>
+                    </aside>
+                </div>
             </div>
         </>
+    );
+}
+
+function OverviewRow({
+    icon: Icon,
+    label,
+    value,
+}: {
+    icon: typeof BookOpen;
+    label: string;
+    value: number;
+}) {
+    return (
+        <div className="flex items-center gap-3">
+            <span className="flex size-9 items-center justify-center bg-emerald-50 text-emerald-800">
+                <Icon className="size-4" />
+            </span>
+            <span className="min-w-0 flex-1 text-sm text-slate-600">
+                {label}
+            </span>
+            <span className="font-semibold text-slate-900 tabular-nums">
+                {value}
+            </span>
+        </div>
     );
 }

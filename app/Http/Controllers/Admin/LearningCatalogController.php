@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Course;
+use App\Models\CourseSection;
+use App\Models\Lesson;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -127,6 +129,38 @@ class LearningCatalogController extends Controller
         return back()->with('success', 'Course teacher assignment updated.');
     }
 
+    public function updateCourseBanner(Request $request, Course $course): RedirectResponse
+    {
+        abort_if(
+            $course->isComplete() && $request->user()->role !== 'admin',
+            403,
+            'Completed courses cannot be changed by instructors.',
+        );
+
+        $validated = $request->validate([
+            'banner' => ['required_without:remove_banner', 'image', 'max:5120'],
+            'remove_banner' => ['sometimes', 'boolean'],
+        ]);
+        $previousBannerPath = $course->banner_path;
+        $newBannerPath = $request->file('banner')?->store('course-banners', 'public');
+
+        if ($request->hasFile('banner') && $newBannerPath === false) {
+            throw new \RuntimeException('The course banner could not be stored.');
+        }
+
+        $course->update([
+            'banner_path' => ($validated['remove_banner'] ?? false)
+                ? null
+                : $newBannerPath,
+        ]);
+
+        if (($newBannerPath || ($validated['remove_banner'] ?? false)) && $previousBannerPath) {
+            Storage::disk('public')->delete($previousBannerPath);
+        }
+
+        return back()->with('success', 'Course banner updated.');
+    }
+
     public function storeSection(Request $request, Course $course): RedirectResponse
     {
         abort_if($course->isComplete() && $request->user()->role !== 'admin', 403, 'Completed courses cannot be changed by instructors.');
@@ -162,6 +196,70 @@ class LearningCatalogController extends Controller
         }
 
         return back()->with('success', 'Course module created.');
+    }
+
+    public function updateSection(Request $request, Course $course, CourseSection $section): RedirectResponse
+    {
+        abort_unless($section->course_id === $course->id, 404);
+        abort_if($course->isComplete() && $request->user()->role !== 'admin', 403, 'Completed courses cannot be changed by instructors.');
+
+        $validated = $request->validate([
+            'title' => ['required', 'string', 'max:150'],
+            'description' => ['nullable', 'string', 'max:2000'],
+            'banner' => ['nullable', 'image', 'max:5120'],
+        ]);
+        $previousBannerPath = $section->banner_path;
+        $newBannerPath = $request->file('banner')?->store('course-sections', 'public');
+
+        try {
+            $section->update([
+                'title' => $validated['title'],
+                'description' => $validated['description'] ?? null,
+                ...($newBannerPath ? ['banner_path' => $newBannerPath] : []),
+            ]);
+        } catch (\Throwable $exception) {
+            if ($newBannerPath) {
+                Storage::disk('public')->delete($newBannerPath);
+            }
+
+            throw $exception;
+        }
+
+        if ($newBannerPath && $previousBannerPath) {
+            Storage::disk('public')->delete($previousBannerPath);
+        }
+
+        return back()->with('success', 'Course module updated.');
+    }
+
+    public function reorderSections(Request $request, Course $course): RedirectResponse
+    {
+        abort_if($course->isComplete() && $request->user()->role !== 'admin', 403, 'Completed courses cannot be changed by instructors.');
+
+        $validated = $request->validate([
+            'sections' => ['required', 'array', 'min:1'],
+            'sections.*' => ['required', 'integer', 'distinct', 'exists:course_sections,id'],
+        ]);
+        $sectionIds = array_map('intval', $validated['sections']);
+        $courseSectionIds = $course->sections()->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+        abort_unless(
+            count($sectionIds) === count($courseSectionIds)
+                && array_diff($sectionIds, $courseSectionIds) === []
+                && array_diff($courseSectionIds, $sectionIds) === [],
+            422,
+            'The course module order is invalid.',
+        );
+
+        DB::transaction(function () use ($course, $sectionIds): void {
+            foreach ($sectionIds as $index => $sectionId) {
+                $course->sections()->whereKey($sectionId)->update([
+                    'sequence' => $index + 1,
+                ]);
+            }
+        });
+
+        return back()->with('success', 'Course modules reordered.');
     }
 
     public function storeLesson(Request $request, Course $course): RedirectResponse
@@ -202,6 +300,21 @@ class LearningCatalogController extends Controller
         ]);
 
         return back()->with('success', 'Lesson added to the course.');
+    }
+
+    public function destroyLesson(Request $request, Course $course, Lesson $lesson): RedirectResponse
+    {
+        abort_unless($lesson->course_id === $course->id, 404);
+        abort_if($course->isComplete() && $request->user()->role !== 'admin', 403, 'Completed courses cannot be changed by instructors.');
+
+        DB::transaction(function () use ($course, $lesson): void {
+            $lesson->delete();
+            $course->update([
+                'duration_minutes' => $course->lessons()->sum('duration_minutes'),
+            ]);
+        });
+
+        return back()->with('success', 'Lesson deleted.');
     }
 
     public function updateSettings(Request $request, Course $course): RedirectResponse

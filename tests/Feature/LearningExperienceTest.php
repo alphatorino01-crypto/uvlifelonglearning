@@ -4,8 +4,10 @@ namespace Tests\Feature;
 
 use App\Models\Course;
 use App\Models\CourseEnrollment;
+use App\Models\CourseMaterial;
 use App\Models\LearningModule;
 use App\Models\Lesson;
+use App\Models\LessonProgress;
 use App\Models\User;
 use Database\Seeders\LearningContentSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -22,13 +24,75 @@ class LearningExperienceTest extends TestCase
     {
         $this->seed(LearningContentSeeder::class);
 
-        $this->get(route('home'))
+        $learner = User::factory()->create(['email_verified_at' => now()]);
+
+        $this->actingAs($learner)->get(route('home'))
             ->assertOk()
             ->assertInertia(fn (Assert $page) => $page
                 ->component('learning/index')
                 ->has('modules', 3)
                 ->has('courses', 6)
                 ->where('courses.0.title', 'Everyday digital essentials'));
+    }
+
+    public function test_guests_see_the_login_page_at_the_homepage(): void
+    {
+        $this->get(route('home'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('auth/login')
+                ->where('canResetPassword', true));
+    }
+
+    public function test_students_can_view_their_progress_and_enrolled_course_materials(): void
+    {
+        $this->seed(LearningContentSeeder::class);
+
+        $course = Course::query()->where('slug', 'everyday-digital-essentials')->firstOrFail();
+        $otherCourse = Course::query()->where('slug', 'stay-safe-online')->firstOrFail();
+        $student = User::factory()->create(['email_verified_at' => now()]);
+        CourseEnrollment::query()->create(['course_id' => $course->id, 'user_id' => $student->id]);
+        $lesson = $course->lessons()->firstOrFail();
+        LessonProgress::query()->create([
+            'user_id' => $student->id,
+            'lesson_id' => $lesson->id,
+            'started_at' => now()->subMinutes($lesson->duration_minutes),
+            'completed_at' => now(),
+        ]);
+        $material = CourseMaterial::query()->create([
+            'course_id' => $course->id,
+            'uploaded_by' => $student->id,
+            'title' => 'Course notes.pdf',
+            'path' => 'course-materials/notes.pdf',
+            'mime_type' => 'application/pdf',
+            'size' => 1024,
+        ]);
+        CourseMaterial::query()->create([
+            'course_id' => $otherCourse->id,
+            'uploaded_by' => $student->id,
+            'title' => 'Other course notes.pdf',
+            'path' => 'course-materials/other-notes.pdf',
+            'mime_type' => 'application/pdf',
+            'size' => 1024,
+        ]);
+
+        $this->actingAs($student)
+            ->get(route('learning.progress'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('learning/progress')
+                ->has('courses', 1)
+                ->where('courses.0.title', $course->title)
+                ->where('courses.0.progress', 33));
+
+        $this->actingAs($student)
+            ->get(route('learning.materials'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('learning/materials')
+                ->has('materials', 1)
+                ->where('materials.0.id', $material->id)
+                ->where('materials.0.course.slug', $course->slug));
     }
 
     public function test_module_and_course_pages_show_their_learning_content(): void
@@ -115,6 +179,7 @@ class LearningExperienceTest extends TestCase
     {
         $this->seed(LearningContentSeeder::class);
         $lesson = Lesson::query()->firstOrFail();
+        $lesson->update(['duration_minutes' => 1]);
 
         $this->post(route('lessons.complete', $lesson))->assertRedirect(route('login'));
 
@@ -134,7 +199,7 @@ class LearningExperienceTest extends TestCase
             ->post(route('lessons.complete', $lesson))
             ->assertSessionHasErrors('lesson');
 
-        $this->travel($lesson->duration_minutes)->minutes();
+        $this->focusLessonFor($learner, $lesson, 60);
 
         $this->actingAs($learner)
             ->post(route('lessons.complete', $lesson), ['continue' => true])
@@ -195,10 +260,11 @@ class LearningExperienceTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_the_lesson_timer_resumes_and_a_learner_can_stay_after_completion(): void
+    public function test_the_lesson_timer_counts_only_while_the_lesson_page_is_focused(): void
     {
         $this->seed(LearningContentSeeder::class);
         $lesson = Lesson::query()->firstOrFail();
+        $lesson->update(['duration_minutes' => 1]);
         $learner = User::factory()->create(['email_verified_at' => now()]);
         CourseEnrollment::query()->create(['course_id' => $lesson->course_id, 'user_id' => $learner->id]);
         $lessonUrl = route('lessons.show', [$lesson->course, $lesson]);
@@ -207,13 +273,30 @@ class LearningExperienceTest extends TestCase
             ->get($lessonUrl)
             ->assertInertia(fn (Assert $page) => $page->where('lesson.remaining_seconds', $lesson->duration_minutes * 60));
 
-        $this->travel(2)->minutes();
-
         $this->actingAs($learner)
             ->get($lessonUrl)
-            ->assertInertia(fn (Assert $page) => $page->where('lesson.remaining_seconds', $lesson->duration_minutes * 60 - 120));
+            ->assertInertia(fn (Assert $page) => $page->where('lesson.remaining_seconds', 60));
 
-        $this->travel($lesson->duration_minutes - 2)->minutes();
+        $this->actingAs($learner)
+            ->postJson(route('lessons.timer', $lesson), ['state' => 'resume'])
+            ->assertOk()
+            ->assertJsonPath('remaining_seconds', 60);
+
+        $this->pulseLessonTimer($learner, $lesson, 3, 10);
+        $this->actingAs($learner)
+            ->postJson(route('lessons.timer', $lesson), ['state' => 'pause'])
+            ->assertOk()
+            ->assertJsonPath('remaining_seconds', 30);
+
+        $this->travel(5)->minutes();
+        $this->actingAs($learner)
+            ->get($lessonUrl)
+            ->assertInertia(fn (Assert $page) => $page->where('lesson.remaining_seconds', 30));
+
+        $this->actingAs($learner)
+            ->postJson(route('lessons.timer', $lesson), ['state' => 'resume'])
+            ->assertOk();
+        $this->pulseLessonTimer($learner, $lesson, 3, 10);
 
         $this->actingAs($learner)
             ->post(route('lessons.complete', $lesson), ['continue' => false])
@@ -222,6 +305,7 @@ class LearningExperienceTest extends TestCase
         $this->assertDatabaseHas('lesson_progress', [
             'user_id' => $learner->id,
             'lesson_id' => $lesson->id,
+            'elapsed_seconds' => 60,
         ]);
     }
 
@@ -251,6 +335,88 @@ class LearningExperienceTest extends TestCase
             ->assertInertia(fn (Assert $page) => $page
                 ->where('course.materials.0.title', 'course-notes.txt')
                 ->where('course.materials.0.is_video', false));
+
+    }
+
+    public function test_course_materials_can_be_assigned_to_a_module_and_are_shown_inside_it(): void
+    {
+        Storage::fake('local');
+        $this->seed(LearningContentSeeder::class);
+        $course = Course::query()->where('slug', 'everyday-digital-essentials')->firstOrFail();
+        $section = $course->sections()->create([
+            'title' => 'Module 1',
+            'slug' => 'module-1',
+            'description' => 'Introduction to the course.',
+            'sequence' => 1,
+        ]);
+        $otherCourse = Course::query()->where('slug', 'stay-safe-online')->firstOrFail();
+        $otherSection = $otherCourse->sections()->create([
+            'title' => 'Other course module',
+            'slug' => 'other-module',
+            'sequence' => 1,
+        ]);
+        $teacher = User::factory()->create(['role' => 'teacher', 'email_verified_at' => now()]);
+        $student = User::factory()->create(['role' => 'student', 'email_verified_at' => now()]);
+        CourseEnrollment::query()->create(['course_id' => $course->id, 'user_id' => $student->id]);
+        $file = UploadedFile::fake()->createWithContent('module-intro.pdf', 'Module introduction');
+
+        $this->actingAs($teacher)
+            ->post(route('materials.store', $course), [
+                'file' => UploadedFile::fake()->createWithContent('wrong-module.pdf', 'Wrong course'),
+                'course_section_id' => $otherSection->id,
+            ])
+            ->assertSessionHasErrors('course_section_id');
+
+        $this->actingAs($teacher)
+            ->post(route('materials.store', $course), [
+                'file' => $file,
+                'course_section_id' => $section->id,
+            ])
+            ->assertRedirect();
+
+        $material = $course->materials()->firstOrFail();
+        $this->assertSame($section->id, $material->course_section_id);
+        Storage::disk('local')->assertExists($material->path);
+
+        $this->actingAs($student)
+            ->get(route('courses.show', $course))
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('course.sections.0.title', 'Module 1')
+                ->where('course.sections.0.description', 'Introduction to the course.')
+                ->where('course.sections.0.materials.0.title', 'module-intro.pdf')
+                ->where('course.sections.0.materials.0.course_section_id', $section->id)
+                ->has('course.materials', 0));
+    }
+
+    /**
+     * Simulate focus heartbeats while the lesson page is active.
+     */
+    private function pulseLessonTimer(User $learner, Lesson $lesson, int $pulses, int $secondsPerPulse): void
+    {
+        for ($pulse = 0; $pulse < $pulses; $pulse++) {
+            $this->travel($secondsPerPulse)->seconds();
+            $this->actingAs($learner)
+                ->postJson(route('lessons.timer', $lesson), ['state' => 'heartbeat'])
+                ->assertOk();
+        }
+    }
+
+    private function focusLessonFor(User $learner, Lesson $lesson, int $seconds): void
+    {
+        $this->actingAs($learner)
+            ->postJson(route('lessons.timer', $lesson), ['state' => 'resume'])
+            ->assertOk();
+
+        $pulses = (int) ceil($seconds / 5);
+        $remaining = $seconds;
+        for ($pulse = 0; $pulse < $pulses; $pulse++) {
+            $interval = min(5, $remaining);
+            $this->travel($interval)->seconds();
+            $this->actingAs($learner)
+                ->postJson(route('lessons.timer', $lesson), ['state' => 'heartbeat'])
+                ->assertOk();
+            $remaining -= $interval;
+        }
     }
 
     public function test_only_an_administrator_can_manage_roles_and_cannot_remove_the_last_admin(): void

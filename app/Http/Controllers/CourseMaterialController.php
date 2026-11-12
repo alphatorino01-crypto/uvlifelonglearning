@@ -8,6 +8,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\File;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -23,6 +24,11 @@ class CourseMaterialController extends Controller
                 File::types(['mp4', 'webm', 'mov', 'avi', 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt'])
                     ->max('200mb'),
             ],
+            'course_section_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('course_sections', 'id')->where('course_id', $course->id),
+            ],
         ]);
         $file = $validated['file'];
         $path = $file->store("course-materials/{$course->id}", 'local');
@@ -34,6 +40,7 @@ class CourseMaterialController extends Controller
         $originalName = basename(str_replace('\\', '/', $file->getClientOriginalName()));
 
         $course->materials()->create([
+            'course_section_id' => $validated['course_section_id'] ?? null,
             'uploaded_by' => $request->user()->id,
             'title' => Str::limit(preg_replace('/[\x00-\x1F\x7F]/u', '', $originalName) ?: 'Course material', 250, ''),
             'path' => $path,

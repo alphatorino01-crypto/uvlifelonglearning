@@ -10,19 +10,31 @@ use App\Models\Lesson;
 use App\Models\LessonProgress;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
+use Laravel\Fortify\Features;
 
 class LearningController extends Controller
 {
+    private const TIMER_HEARTBEAT_GRACE_SECONDS = 12;
+
     public function index(Request $request): Response|RedirectResponse
     {
         if ($request->user()?->isAdmin()) {
             return to_route('admin.dashboard');
+        }
+
+        if (! $request->user()) {
+            return Inertia::render('auth/login', [
+                'canResetPassword' => Features::enabled(Features::resetPasswords()),
+                'status' => $request->session()->get('status'),
+            ]);
         }
 
         return Inertia::render('learning/index', [
@@ -49,6 +61,71 @@ class LearningController extends Controller
         ]);
     }
 
+    public function progress(Request $request): Response
+    {
+        $user = $request->user();
+        $courses = Course::query()
+            ->whereHas('enrollments', fn (Builder $enrollments) => $enrollments->where('user_id', $user->id))
+            ->with(['module', 'teacher'])
+            ->withCount('lessons')
+            ->withCount([
+                'lessons as completed_lessons_count' => fn (Builder $lessons) => $lessons->whereHas(
+                    'progress',
+                    fn (Builder $progress) => $progress->where('user_id', $user->id)->whereNotNull('completed_at'),
+                ),
+            ])
+            ->orderBy('sequence')
+            ->get()
+            ->map(fn (Course $course): array => $this->courseData(
+                $course,
+                [],
+                $course->lessons_count,
+                $course->completed_lessons_count,
+            ))
+            ->all();
+
+        return Inertia::render('learning/progress', ['courses' => $courses]);
+    }
+
+    public function materials(Request $request): Response
+    {
+        $user = $request->user();
+        $accessibleCourseIds = null;
+
+        if ($user->role === 'student') {
+            $accessibleCourseIds = Course::query()
+                ->whereHas('enrollments', fn (Builder $enrollments) => $enrollments->where('user_id', $user->id))
+                ->get()
+                ->filter(fn (Course $course): bool => $course->effectiveStatus() !== 'closed')
+                ->modelKeys();
+        }
+
+        $materials = CourseMaterial::query()
+            ->with('course:id,title,slug')
+            ->when(
+                $accessibleCourseIds !== null,
+                fn (Builder $query) => $query->whereIn('course_id', $accessibleCourseIds),
+            )
+            ->latest()
+            ->get()
+            ->map(fn (CourseMaterial $material): array => [
+                'id' => $material->id,
+                'title' => $material->title,
+                'mime_type' => $material->mime_type,
+                'size' => $material->size,
+                'is_video' => str_starts_with($material->mime_type, 'video/'),
+                'download_url' => route('materials.download', $material),
+                'course_section_id' => $material->course_section_id,
+                'course' => [
+                    'title' => $material->course->title,
+                    'slug' => $material->course->slug,
+                ],
+            ])
+            ->all();
+
+        return Inertia::render('learning/materials', ['materials' => $materials]);
+    }
+
     public function showModule(Request $request, LearningModule $module): Response
     {
         $courses = $this->courseDataList($request->user(), $module->courses()->pluck('id'));
@@ -67,7 +144,7 @@ class LearningController extends Controller
 
     public function showCourse(Request $request, Course $course): Response
     {
-        $course->load('module', 'lessons', 'materials', 'sections', 'teacher');
+        $course->load('module', 'lessons', 'materials', 'sections.materials', 'sections.documents', 'teacher');
         $user = $request->user();
         $status = $course->effectiveStatus();
         $isStaff = in_array($user?->role, ['admin', 'teacher'], true);
@@ -88,6 +165,17 @@ class LearningController extends Controller
             : ($status === 'complete'
                 ? 'This course is complete. You can review content, but participation is closed.'
                 : 'Course content is available to enrolled students. Contact your administrator to enroll.');
+        if ($user?->role === 'student') {
+            $courseData['sections'] = collect($courseData['sections'])
+                ->map(fn (array $section): array => [
+                    ...$section,
+                    'documents' => array_values(array_filter(
+                        $section['documents'],
+                        fn (array $document): bool => ! $document['hidden_from_students'],
+                    )),
+                ])
+                ->all();
+        }
         if (! $canAccessContent) {
             $courseData['materials'] = [];
             $courseData['sections'] = [];
@@ -129,16 +217,18 @@ class LearningController extends Controller
             )
             : null;
 
-        if ($progress && ! $progress->started_at) {
-            $progress->started_at = now();
+        if ($progress && ! $progress->completed_at && $progress->timer_active) {
+            $this->accrueFocusedLessonTime($progress, $lesson);
+            $progress->timer_active = false;
+            $progress->timer_last_active_at = null;
             $progress->save();
         }
 
-        $remainingSeconds = $progress?->completed_at
-            ? 0
-            : ($progress?->started_at
-                ? max(0, (int) ceil(now()->diffInSeconds($progress->started_at->copy()->addMinutes($lesson->duration_minutes), false)))
-                : null);
+        $remainingSeconds = $progress === null
+            ? null
+            : ($progress->completed_at
+                ? 0
+                : max(0, ($lesson->duration_minutes * 60) - $progress->elapsed_seconds));
         $nextLesson = $lessonIndex < $lessons->count() - 1 ? $lessons[$lessonIndex + 1] : null;
 
         return Inertia::render('learning/lesson', [
@@ -173,23 +263,7 @@ class LearningController extends Controller
     {
         $user = $request->user();
         $continue = $request->boolean('continue');
-        if ($user->role === 'student') {
-            abort_unless($lesson->course->studentHasAccess($user), 403, 'You are not enrolled in this course.');
-        }
-        abort_if($lesson->course->isComplete(), 403, 'Course participation is closed.');
-
-        $previousLesson = $lesson->course->lessons()
-            ->where('sequence', '<', $lesson->sequence)
-            ->reorder('sequence', 'desc')
-            ->first();
-
-        if ($user->role === 'student' && $previousLesson?->requires_completion) {
-            $previousCompleted = $user->lessonProgress()
-                ->where('lesson_id', $previousLesson->id)
-                ->whereNotNull('completed_at')
-                ->exists();
-            abort_unless($previousCompleted, 403, 'Complete the previous lesson before continuing.');
-        }
+        $this->authorizeLessonParticipation($user, $lesson);
 
         $progress = LessonProgress::query()
             ->where('user_id', $user->id)
@@ -202,7 +276,15 @@ class LearningController extends Controller
             ]);
         }
 
-        if (! $progress->completed_at && $progress->started_at && now()->lt($progress->started_at->copy()->addMinutes($lesson->duration_minutes))) {
+        if (! $progress->completed_at && $progress->timer_active) {
+            $this->accrueFocusedLessonTime($progress, $lesson);
+        }
+
+        if (! $progress->completed_at && $progress->elapsed_seconds < $lesson->duration_minutes * 60) {
+            $progress->timer_active = false;
+            $progress->timer_last_active_at = null;
+            $progress->save();
+
             return back()->withErrors([
                 'lesson' => 'Finish the lesson duration before marking it complete.',
             ]);
@@ -210,6 +292,8 @@ class LearningController extends Controller
 
         if (! $progress->completed_at) {
             $progress->completed_at = now();
+            $progress->timer_active = false;
+            $progress->timer_last_active_at = null;
             $progress->save();
         }
 
@@ -227,6 +311,45 @@ class LearningController extends Controller
         return back()->with('success', 'Lesson completed.');
     }
 
+    public function updateLessonTimer(Request $request, Lesson $lesson): JsonResponse
+    {
+        $user = $request->user();
+        $this->authorizeLessonParticipation($user, $lesson);
+        $validated = $request->validate([
+            'state' => ['required', Rule::in(['resume', 'heartbeat', 'pause'])],
+        ]);
+        $progress = LessonProgress::query()->firstOrCreate(
+            ['user_id' => $user->id, 'lesson_id' => $lesson->id],
+            ['started_at' => now()],
+        );
+
+        if (! $progress->completed_at) {
+            $wasActive = $progress->timer_active;
+            if ($wasActive) {
+                $this->accrueFocusedLessonTime($progress, $lesson);
+            }
+
+            if ($validated['state'] === 'resume') {
+                $progress->timer_active = true;
+                $progress->timer_last_active_at = now();
+            } elseif ($validated['state'] === 'heartbeat' && $wasActive) {
+                $progress->timer_active = true;
+                $progress->timer_last_active_at = now();
+            } elseif ($validated['state'] === 'pause') {
+                $progress->timer_active = false;
+                $progress->timer_last_active_at = null;
+            }
+
+            $progress->save();
+        }
+
+        return response()->json([
+            'elapsed_seconds' => $progress->elapsed_seconds,
+            'remaining_seconds' => max(0, ($lesson->duration_minutes * 60) - $progress->elapsed_seconds),
+            'completed' => $progress->completed_at !== null,
+        ]);
+    }
+
     public function updatePrerequisite(Request $request, Lesson $lesson): RedirectResponse
     {
         abort_if(
@@ -242,6 +365,42 @@ class LearningController extends Controller
         $lesson->update($validated);
 
         return back()->with('success', 'Lesson prerequisite updated.');
+    }
+
+    private function authorizeLessonParticipation(User $user, Lesson $lesson): void
+    {
+        if ($user->role === 'student') {
+            abort_unless($lesson->course->studentHasAccess($user), 403, 'You are not enrolled in this course.');
+        }
+        abort_if($lesson->course->isComplete(), 403, 'Course participation is closed.');
+
+        $previousLesson = $lesson->course->lessons()
+            ->where('sequence', '<', $lesson->sequence)
+            ->reorder('sequence', 'desc')
+            ->first();
+
+        if ($user->role === 'student' && $previousLesson?->requires_completion) {
+            $previousCompleted = $user->lessonProgress()
+                ->where('lesson_id', $previousLesson->id)
+                ->whereNotNull('completed_at')
+                ->exists();
+            abort_unless($previousCompleted, 403, 'Complete the previous lesson before continuing.');
+        }
+    }
+
+    private function accrueFocusedLessonTime(LessonProgress $progress, Lesson $lesson): void
+    {
+        if (! $progress->timer_last_active_at) {
+            return;
+        }
+
+        $elapsed = max(0, (int) $progress->timer_last_active_at->diffInSeconds(now(), false));
+        if ($elapsed <= self::TIMER_HEARTBEAT_GRACE_SECONDS) {
+            $progress->elapsed_seconds = min(
+                $lesson->duration_minutes * 60,
+                $progress->elapsed_seconds + $elapsed,
+            );
+        }
     }
 
     /**
@@ -345,14 +504,11 @@ class LearningController extends Controller
                 'color' => $course->module->color,
             ] : null,
             'materials' => $course->relationLoaded('materials')
-                ? $course->materials->map(fn (CourseMaterial $material): array => [
-                    'id' => $material->id,
-                    'title' => $material->title,
-                    'mime_type' => $material->mime_type,
-                    'size' => $material->size,
-                    'is_video' => str_starts_with($material->mime_type, 'video/'),
-                    'download_url' => route('materials.download', $material),
-                ])->all()
+                ? $course->materials
+                    ->whereNull('course_section_id')
+                    ->map(fn (CourseMaterial $material): array => $this->courseMaterialData($material))
+                    ->values()
+                    ->all()
                 : [],
             'teacher' => $course->teacher?->name,
             'banner_url' => $course->banner_path ? Storage::disk('public')->url($course->banner_path) : null,
@@ -363,6 +519,17 @@ class LearningController extends Controller
                     'description' => $section->description,
                     'banner_url' => $section->banner_path ? Storage::disk('public')->url($section->banner_path) : null,
                     'lesson_count' => $lessons?->where('course_section_id', $section->id)->count() ?? 0,
+                    'materials' => $section->relationLoaded('materials')
+                        ? $section->materials->map(fn (CourseMaterial $material): array => $this->courseMaterialData($material))->all()
+                        : [],
+                    'documents' => $section->relationLoaded('documents')
+                        ? $section->documents->map(fn ($document): array => [
+                            'id' => $document->id,
+                            'title' => $document->title,
+                            'hidden_from_students' => $document->hidden_from_students,
+                            'show_url' => route('documents.show', [$course, $document]),
+                        ])->all()
+                        : [],
                 ])->all()
                 : [],
             'effective_status' => $course->effectiveStatus(),
@@ -382,6 +549,22 @@ class LearningController extends Controller
                 'mastery_instructors_visible' => $course->mastery_instructors_visible,
                 'mastery_students_visible' => $course->mastery_students_visible,
             ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function courseMaterialData(CourseMaterial $material): array
+    {
+        return [
+            'id' => $material->id,
+            'title' => $material->title,
+            'mime_type' => $material->mime_type,
+            'size' => $material->size,
+            'is_video' => str_starts_with($material->mime_type, 'video/'),
+            'download_url' => route('materials.download', $material),
+            'course_section_id' => $material->course_section_id,
         ];
     }
 
