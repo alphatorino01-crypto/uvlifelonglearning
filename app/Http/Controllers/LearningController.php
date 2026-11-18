@@ -511,13 +511,13 @@ class LearningController extends Controller
                     ->all()
                 : [],
             'teacher' => $course->teacher?->name,
-            'banner_url' => $course->banner_path ? Storage::disk('public')->url($course->banner_path) : null,
+            'banner_url' => $course->banner_path ? Storage::disk(config('filesystems.media_public_disk'))->url($course->banner_path) : null,
             'sections' => $course->relationLoaded('sections')
                 ? $course->sections->map(fn (CourseSection $section): array => [
                     'id' => $section->id,
                     'title' => $section->title,
                     'description' => $section->description,
-                    'banner_url' => $section->banner_path ? Storage::disk('public')->url($section->banner_path) : null,
+                    'banner_url' => $section->banner_path ? Storage::disk(config('filesystems.media_public_disk'))->url($section->banner_path) : null,
                     'lesson_count' => $lessons?->where('course_section_id', $section->id)->count() ?? 0,
                     'materials' => $section->relationLoaded('materials')
                         ? $section->materials->map(fn (CourseMaterial $material): array => $this->courseMaterialData($material))->all()

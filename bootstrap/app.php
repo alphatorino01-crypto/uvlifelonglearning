@@ -17,6 +17,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Configure with the load balancer's private IP/CIDR ranges in production.
+        $middleware->trustProxies(at: env('TRUSTED_PROXIES'));
         $middleware->encryptCookies(except: ['appearance', 'sidebar_state']);
         $middleware->alias([
             'role' => EnsureUserRole::class,

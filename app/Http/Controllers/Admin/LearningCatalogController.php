@@ -59,7 +59,7 @@ class LearningCatalogController extends Controller
             'teacher_id' => ['nullable', 'integer', Rule::exists('users', 'id')->where('role', 'teacher')],
             'banner' => ['nullable', 'image', 'max:5120'],
         ]);
-        $bannerPath = $request->file('banner')?->store('course-banners', 'public');
+        $bannerPath = $request->file('banner')?->store('course-banners', config('filesystems.media_public_disk'));
         $lessonSlug = Str::slug($validated['lesson_title']);
         if ($lessonSlug === '') {
             $lessonSlug = Str::lower(Str::random(12));
@@ -96,7 +96,7 @@ class LearningCatalogController extends Controller
             });
         } catch (\Throwable $exception) {
             if ($bannerPath) {
-                Storage::disk('public')->delete($bannerPath);
+                Storage::disk(config('filesystems.media_public_disk'))->delete($bannerPath);
             }
 
             throw $exception;
@@ -142,7 +142,7 @@ class LearningCatalogController extends Controller
             'remove_banner' => ['sometimes', 'boolean'],
         ]);
         $previousBannerPath = $course->banner_path;
-        $newBannerPath = $request->file('banner')?->store('course-banners', 'public');
+        $newBannerPath = $request->file('banner')?->store('course-banners', config('filesystems.media_public_disk'));
 
         if ($request->hasFile('banner') && $newBannerPath === false) {
             throw new \RuntimeException('The course banner could not be stored.');
@@ -155,7 +155,7 @@ class LearningCatalogController extends Controller
         ]);
 
         if (($newBannerPath || ($validated['remove_banner'] ?? false)) && $previousBannerPath) {
-            Storage::disk('public')->delete($previousBannerPath);
+            Storage::disk(config('filesystems.media_public_disk'))->delete($previousBannerPath);
         }
 
         return back()->with('success', 'Course banner updated.');
@@ -170,7 +170,7 @@ class LearningCatalogController extends Controller
             'description' => ['nullable', 'string', 'max:2000'],
             'banner' => ['nullable', 'image', 'max:5120'],
         ]);
-        $bannerPath = $request->file('banner')?->store('course-sections', 'public');
+        $bannerPath = $request->file('banner')?->store('course-sections', config('filesystems.media_public_disk'));
         $baseSlug = Str::slug($validated['title']) ?: Str::lower(Str::random(12));
         $slug = $baseSlug;
         $suffix = 2;
@@ -189,7 +189,7 @@ class LearningCatalogController extends Controller
             ]);
         } catch (\Throwable $exception) {
             if ($bannerPath) {
-                Storage::disk('public')->delete($bannerPath);
+                Storage::disk(config('filesystems.media_public_disk'))->delete($bannerPath);
             }
 
             throw $exception;
@@ -209,7 +209,7 @@ class LearningCatalogController extends Controller
             'banner' => ['nullable', 'image', 'max:5120'],
         ]);
         $previousBannerPath = $section->banner_path;
-        $newBannerPath = $request->file('banner')?->store('course-sections', 'public');
+        $newBannerPath = $request->file('banner')?->store('course-sections', config('filesystems.media_public_disk'));
 
         try {
             $section->update([
@@ -219,14 +219,14 @@ class LearningCatalogController extends Controller
             ]);
         } catch (\Throwable $exception) {
             if ($newBannerPath) {
-                Storage::disk('public')->delete($newBannerPath);
+                Storage::disk(config('filesystems.media_public_disk'))->delete($newBannerPath);
             }
 
             throw $exception;
         }
 
         if ($newBannerPath && $previousBannerPath) {
-            Storage::disk('public')->delete($previousBannerPath);
+            Storage::disk(config('filesystems.media_public_disk'))->delete($previousBannerPath);
         }
 
         return back()->with('success', 'Course module updated.');

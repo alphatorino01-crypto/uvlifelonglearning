@@ -58,9 +58,11 @@ class CourseDocumentController extends Controller
         $sectionId = (int) $validated['course_section_id'];
         $storedImages = [];
         $storedFiles = [];
+        $publicDisk = config('filesystems.media_public_disk');
+        $privateDisk = config('filesystems.media_private_disk');
 
         try {
-            $document = DB::transaction(function () use ($validated, $request, $course, $sectionId, &$storedImages, &$storedFiles): CourseDocument {
+            $document = DB::transaction(function () use ($validated, $request, $course, $sectionId, &$storedImages, &$storedFiles, $publicDisk, $privateDisk): CourseDocument {
                 $documentBlocks = [];
 
                 foreach ($validated['blocks'] as $index => $block) {
@@ -81,7 +83,7 @@ class CourseDocumentController extends Controller
 
                     $file = $block['file'];
                     if ($block['type'] === 'image') {
-                        $path = $file->store("course-documents/{$course->id}", 'public');
+                        $path = $file->store("course-documents/{$course->id}", $publicDisk);
                         if ($path === false) {
                             throw new \RuntimeException('The document image could not be stored.');
                         }
@@ -91,7 +93,7 @@ class CourseDocumentController extends Controller
                         continue;
                     }
 
-                    $path = $file->store("course-documents/{$course->id}", 'local');
+                    $path = $file->store("course-documents/{$course->id}", $privateDisk);
                     if ($path === false) {
                         throw new \RuntimeException('The document attachment could not be stored.');
                     }
@@ -115,8 +117,8 @@ class CourseDocumentController extends Controller
                 ]);
             });
         } catch (\Throwable $exception) {
-            Storage::disk('public')->delete($storedImages);
-            Storage::disk('local')->delete($storedFiles);
+            Storage::disk($publicDisk)->delete($storedImages);
+            Storage::disk($privateDisk)->delete($storedFiles);
 
             throw $exception;
         }
@@ -149,7 +151,7 @@ class CourseDocumentController extends Controller
             if ($block['type'] === 'image') {
                 return [
                     'type' => 'image',
-                    'url' => Storage::disk('public')->url($block['path']),
+                    'url' => Storage::disk(config('filesystems.media_public_disk'))->url($block['path']),
                 ];
             }
 
@@ -292,7 +294,7 @@ class CourseDocumentController extends Controller
         return $result;
     }
 
-    public function download(Request $request, Course $course, CourseDocument $document, int $index): StreamedResponse
+    public function download(Request $request, Course $course, CourseDocument $document, int $index): RedirectResponse|StreamedResponse
     {
         abort_unless($document->course_id === $course->id, 404);
         $user = $request->user();
@@ -303,10 +305,21 @@ class CourseDocumentController extends Controller
 
         $block = $document->blocks[$index] ?? null;
         abort_unless(is_array($block) && ($block['type'] ?? null) === 'file', 404);
-        abort_unless(Storage::disk('local')->exists($block['path']), 404);
+        $disk = Storage::disk(config('filesystems.media_private_disk'));
+        abort_unless($disk->exists($block['path']), 404);
+
+        if (config('filesystems.media_private_disk') === 'r2_private') {
+            $inline = str_starts_with($block['mime_type'], 'video/');
+            $filename = basename(str_replace('\\', '/', $block['title']));
+
+            return redirect()->away($disk->temporaryUrl($block['path'], now()->addMinutes(10), [
+                'ResponseContentType' => $block['mime_type'],
+                'ResponseContentDisposition' => ($inline ? 'inline' : 'attachment').'; filename="'.addcslashes($filename, '"\\').'"',
+            ]));
+        }
 
         $inline = str_starts_with($block['mime_type'], 'video/');
-        $response = Storage::disk('local')->response(
+        $response = $disk->response(
             $block['path'],
             basename(str_replace('\\', '/', $block['title'])),
             [

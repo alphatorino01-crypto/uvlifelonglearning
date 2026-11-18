@@ -4,9 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Models\Course;
 use App\Models\CourseMaterial;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\File;
@@ -31,7 +31,8 @@ class CourseMaterialController extends Controller
             ],
         ]);
         $file = $validated['file'];
-        $path = $file->store("course-materials/{$course->id}", 'local');
+        $disk = config('filesystems.media_private_disk');
+        $path = $file->store("course-materials/{$course->id}", $disk);
 
         if ($path === false) {
             throw new \RuntimeException('The course material could not be stored.');
@@ -55,7 +56,7 @@ class CourseMaterialController extends Controller
     {
         abort_if($material->course->isComplete() && $request->user()->role !== 'admin', 403, 'Completed courses cannot be changed by instructors.');
 
-        if (! Storage::disk('local')->delete($material->path)) {
+        if (! Storage::disk(config('filesystems.media_private_disk'))->delete($material->path)) {
             throw new \RuntimeException('The course material file could not be removed.');
         }
 
@@ -64,18 +65,26 @@ class CourseMaterialController extends Controller
         return back()->with('success', 'Course material removed.');
     }
 
-    public function download(Request $request, CourseMaterial $material): StreamedResponse
+    public function download(Request $request, CourseMaterial $material): RedirectResponse|StreamedResponse
     {
         $user = $request->user();
         if ($user->role === 'student') {
             abort_unless($material->course->studentHasAccess($user), 403, 'Enroll in this open course to access its materials.');
         }
 
-        abort_unless(Storage::disk('local')->exists($material->path), 404);
+        $disk = Storage::disk(config('filesystems.media_private_disk'));
+        abort_unless($disk->exists($material->path), 404);
+
+        if (config('filesystems.media_private_disk') === 'r2_private') {
+            return redirect()->away($disk->temporaryUrl($material->path, now()->addMinutes(10), [
+                'ResponseContentType' => $material->mime_type,
+                'ResponseContentDisposition' => (str_starts_with($material->mime_type, 'video/') ? 'inline' : 'attachment').'; filename="'.addcslashes(basename(str_replace('\\', '/', $material->title)), '"\\').'"',
+            ]));
+        }
 
         $inline = str_starts_with($material->mime_type, 'video/');
 
-        $response = Storage::disk('local')->response(
+        $response = $disk->response(
             $material->path,
             basename(str_replace('\\', '/', $material->title)),
             [

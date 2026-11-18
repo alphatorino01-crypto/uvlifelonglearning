@@ -2192,7 +2192,7 @@ export default function CoursePage({ course, lessons }: Props) {
                             </button>
                             <button
                                 type="button"
-                                onClick={startCreatingLesson}
+                                onClick={() => startCreatingLesson()}
                                 className="flex w-full items-center gap-4 border border-slate-200 bg-white p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/50"
                             >
                                 <span className="flex size-11 shrink-0 items-center justify-center bg-emerald-50 text-emerald-800">
@@ -2210,7 +2210,7 @@ export default function CoursePage({ course, lessons }: Props) {
                             </button>
                             <button
                                 type="button"
-                                onClick={startCreatingDocument}
+                                onClick={() => startCreatingDocument()}
                                 className="flex w-full items-center gap-4 border border-slate-200 bg-white p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/50"
                             >
                                 <span className="flex size-11 shrink-0 items-center justify-center bg-emerald-50 text-emerald-800">
@@ -2228,7 +2228,7 @@ export default function CoursePage({ course, lessons }: Props) {
                             </button>
                             <button
                                 type="button"
-                                onClick={startUploadingMaterial}
+                                onClick={() => startUploadingMaterial()}
                                 className="flex w-full items-center gap-4 border border-slate-200 bg-white p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/50"
                             >
                                 <span className="flex size-11 shrink-0 items-center justify-center bg-emerald-50 text-emerald-800">
